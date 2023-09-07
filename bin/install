@@ -1,73 +1,78 @@
 #!/usr/bin/env bash
 
+if [[ "${RTX_DEBUG-0}" == "1" ]]; then
+    set -o xtrace
+fi
+
+# Repository URL
+readonly ponyup_repo="https://github.com/ponylang/ponyup"
+readonly VERSION_REGEX='([0-9]*)\.(.*)'
+
+ponyup_versions(){
+    local tag
+    for tag in $(git ls-remote --tags "${ponyup_repo}"); do
+        if [[ ${tag} =~ refs/tags/${VERSION_REGEX}$ ]]; then
+        echo "${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+        fi
+    done \
+        | grep -v \{\} \
+        | LC_ALL=C sort -t '.' -k 1,1n -k 2,2n -k 3,3n -k 4,4d -k 5,5d \
+        | tr '\n' ' '
+}
+
+latest_ponyup_version(){
+    read -ra versions <<< "$(ponyup_versions)"
+    echo ${versions[-1]}
+}
+
+find_ponyup(){
+    local found=$(which ponyup)
+    if [[ ! "$found" ]]; then
+        if [ -z "${XDG_DATA_HOME+x}" ]; then
+            found=$(command "$HOME/.local/share/ponyup/bin/ponyup")
+        else
+            found=$(command "$XDG_DATA_HOME/ponyup/bin/ponyup")
+        fi
+    fi
+    if [[ "$found" ]]; then
+        echo $found
+    else
+        echo Unable to find ponyup executable.
+        exit 1
+    fi
+}
+
+verify_latest_ponyup(){
+    if [[ ! $(which ponyup) ]]; then
+        sh -c "$(curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/ponylang/ponyup/latest-release/ponyup-init.sh)"
+    fi
+    # TODO: This only works if it's in the path...
+    # For systems without ponyup to begin with, we'll have to figure out where ponyup got installed
+    # and use an explicit path to it.
+    local ponyup=$(find_ponyup)
+    local ponyup_ver=$("$ponyup" version | cut -d' ' -f2)
+    if [[ "$ponyup_ver" != "$(latest_ponyup_version)" ]]; then
+        "$ponyup" update ponyup release
+        "$ponyup" select ponyup release
+    fi
+}
+
 install_ponyc(){
     local install_type=$1
     local version=$2
     local install_path=$3
 
-    if [ "$TMPDIR" = "" ]; then
-        local tmp_download_dir=$(mktemp -d -t ponyc_build_XXXXXX)
+    local ponyup=$(find_ponyup)
+    "$ponyup" update ponyc release-$version
+    if [[ $? -eq 0 ]]; then
+        rmdir "$install_path"
+        echo ln -s $(/bin/ls -d $(dirname $(dirname "$ponyup"))/ponyc-release-$version-*) "$install_path"
+        ln -s $(/bin/ls -d $(dirname $(dirname "$ponyup"))/ponyc-release-$version-*) "$install_path"
     else
-        local tmp_download_dir=$TMPDIR
+        echo epic fail
+        exit 1
     fi
-
-    # path to the tar file
-    local source_path=$(get_download_file_path $install_type $version $tmp_download_dir)
-    echo $source_path
-    download_source_file $install_type $version $source_path
-
-    # running this in a subshell
-    # we don't want to disturb current working dir
-    (
-        tar zxf $source_path -C $install_path --strip-components=1 || exit 1
-        cd $install_path
-        make clean
-        mkdir bin
-        PONY_BUILD_DIR=bin/ make default_pic=true lto=yes
-
-        if [ $? -ne 0 ]; then
-            rm -rf $install_path
-            exit 1
-        fi
-    )
-
-    rm -rf $tmp_download_dir
 }
 
-download_source_file() {
-    local install_type=$1
-    local version=$2
-    local download_path=$3
-    local download_url=$(get_download_url $install_type $version)
-
-    curl -Lo $download_path -C - $download_url
-}
-
-get_download_file_path() {
-    local install_type=$1
-    local version=$2
-    local tmp_download_dir=$3
-
-    if [ "$install_type" = "version" ]; then
-        local pkg_name="ponyc-${version}-${install_type}.tar.gz"
-    else
-        local pkg_name="ponyc-${version}.tar.gz"
-    fi
-
-    echo "$tmp_download_dir/$pkg_name"
-}
-
-get_download_url() {
-    local install_type=$1
-    local version=$2
-    local operating_system=""
-    local arch=""
-
-    [ "Linux" = "$(uname)" ] && operating_system="linux" || operating_system="darwin"
-    [ "x86_64" = "$(uname -m)" ] && arch="x86_64" || arch="i686"
-
-    echo "https://github.com/ponylang/ponyc/archive/${version}.tar.gz"
-}
-
-
+verify_latest_ponyup
 install_ponyc $ASDF_INSTALL_TYPE $ASDF_INSTALL_VERSION $ASDF_INSTALL_PATH
