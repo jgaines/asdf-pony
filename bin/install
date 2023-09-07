@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+if [[ "${RTX_DEBUG-0}" == "1" ]]; then
+    set -o xtrace
+fi
+
 install_ponyc(){
     local install_type=$1
     local version=$2
@@ -23,6 +27,7 @@ install_ponyc(){
         cd $install_path
         make clean
         mkdir bin
+        mikir -p build/build_release
         PONY_BUILD_DIR=bin/ make default_pic=true lto=yes
 
         if [ $? -ne 0 ]; then
